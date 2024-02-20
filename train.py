@@ -57,8 +57,8 @@ if __name__ == "__main__":
     dataset_name = args.dataset
     dataset_config = {
         'Synapse': {
-            'root_path': '../data/Synapse/train_npz',
-            'list_dir': './lists/lists_Synapse',
+            'root_path': "/home/ubuntu/files/project_TransUNet/data/Synapse/train_npz",
+            'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Synapse",
             'num_classes': 9,
         },
     }
