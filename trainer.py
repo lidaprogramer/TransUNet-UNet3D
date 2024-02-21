@@ -1,3 +1,4 @@
+
 import argparse
 import logging
 import os
@@ -14,6 +15,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss
 from torchvision import transforms
+import cv2
+from PIL import Image
 
 def trainer_synapse(args, model, snapshot_path):
     from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
@@ -21,15 +24,31 @@ def trainer_synapse(args, model, snapshot_path):
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
-    base_lr = args.base_lr
-    num_classes = args.num_classes
-    batch_size = args.batch_size * args.n_gpu
+    base_lr = args['base_lr']
+    num_classes = args['num_classes']
+    batch_size = args['batch_size'] * args['n_gpu']
     # max_iterations = args.max_iterations
-    db_train = Synapse_dataset(base_dir=args.root_path, list_dir=args.list_dir, split="train",
+    db_train = Synapse_dataset(base_dir=args['root_path'], list_dir=args['list_dir'], split="train",
                                transform=transforms.Compose(
-                                   [RandomGenerator(output_size=[args.img_size, args.img_size])]))
+                                   [RandomGenerator(output_size=[args['img_size'], args['img_size']])]))
     print("The length of train set is: {}".format(len(db_train)))
+    
+    import matplotlib.pyplot as plt
+    image = np.squeeze(db_train[0]['image'].permute(1, 2, 0).numpy() ) # Permute for color images
+    # Normalize or rescale the image
+    if image.min() < 0:  # Assuming the range is [-1, 1]
+        image = (image + 1) / 2  # Rescale to [0, 1]
+    image = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
 
+    # Convert to PIL Image
+    image_pil = Image.fromarray(image)
+
+    # Convert to PIL Image
+    image_pil = Image.fromarray(np.uint8(image))  # Convert to uint8
+
+    # Save the image
+    image_pil.save('image.png')
+    
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
