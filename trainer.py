@@ -54,7 +54,7 @@ def trainer_synapse(args, model, snapshot_path):
 
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
                              worker_init_fn=worker_init_fn)
-    if args.n_gpu > 1:
+    if args['n_gpu'] > 1:
         model = nn.DataParallel(model)
     model.train()
     ce_loss = CrossEntropyLoss()
@@ -62,7 +62,7 @@ def trainer_synapse(args, model, snapshot_path):
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
     writer = SummaryWriter(snapshot_path + '/log')
     iter_num = 0
-    max_epoch = args.max_epochs
+    max_epoch = args['max_epochs']
     max_iterations = args.max_epochs * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
     best_performance = 0.0
