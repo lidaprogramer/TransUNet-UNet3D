@@ -50,7 +50,7 @@ def trainer_synapse(args, model, snapshot_path):
     image_pil.save('image.png')
     
     def worker_init_fn(worker_id):
-        random.seed(args.seed + worker_id)
+        random.seed(args['seed'] + worker_id)
 
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True,
                              worker_init_fn=worker_init_fn)
@@ -63,7 +63,7 @@ def trainer_synapse(args, model, snapshot_path):
     writer = SummaryWriter(snapshot_path + '/log')
     iter_num = 0
     max_epoch = args['max_epochs']
-    max_iterations = args.max_epochs * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
+    max_iterations = args['max_epochs'] * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)

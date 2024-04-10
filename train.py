@@ -61,6 +61,7 @@ if __name__ == "__main__":
     args['list_dir'] = dataset_config[dataset_name]['list_dir']
     args['is_pretrain'] = True
     args['exp'] = 'TU_' + dataset_name + str(args['img_size'])
+    args['max_epochs'] = 150
 
     snapshot_path = "../model/{}/{}".format(args['exp'], 'TU')
     snapshot_path = snapshot_path + '_pretrain' if args['is_pretrain'] else snapshot_path
