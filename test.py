@@ -13,13 +13,14 @@ from datasets.dataset_synapse import Synapse_dataset
 from utils import test_single_volume
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from tensorboardX import SummaryWriter
+
 
 # %%
 # Manually setting what previously were command-line arguments
 args = {
-    'root_path': '../data/Synapse/train_npz',
     'dataset': 'Synapse',
-    'list_dir': './lists/lists_Synapse',
+    'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Synapse",
     'num_classes': 9,
     'max_iterations': 30000,
     'max_epochs': 150,
@@ -32,7 +33,10 @@ args = {
     'n_skip': 3,
     'vit_name': 'R50-ViT-B_16',
     'vit_patches_size': 16,
-     'base_lr': 0.01
+    'base_lr': 0.01,
+    'is_savenii': 'store_true',
+    'volume_path': '../data/Synapse/test_vol_h5',
+    'test_save_dir': '../predictions',
 }
 
 # Use the arguments
@@ -43,7 +47,7 @@ args = {
 
 
 def inference(args, model, test_save_path=None):
-    db_test = args.Dataset(base_dir=args.volume_path, split="test_vol", list_dir=args.list_dir)
+    db_test = Synapse_dataset(base_dir=args['volume_path'], split="test_vol", list_dir=args['list_dir'])
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
@@ -51,8 +55,14 @@ def inference(args, model, test_save_path=None):
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         h, w = sampled_batch["image"].size()[2:]
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
-        metric_i = test_single_volume(image, label, model, classes=args['num_classes'], patch_size=[args['img_size'], args['img_size']],
+        metric_i, prediction = test_single_volume(image, label, model, classes=args['num_classes'], patch_size=[args['img_size'], args['img_size']],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args['z_spacing'])
+        image = (image - image.min()) / (image.max() - image.min())
+        writer.add_image('input/Image', image, iter_num)
+        outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
+        writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
+        labs = label_batch[1, ...].unsqueeze(0) * 50
+        writer.add_image('train/GroundTruth', labs, iter_num)
                               
         metric_list += np.array(metric_i)
         logging.info('idx %d case %s mean_dice %f mean_hd95 %f' % (i_batch, case_name, np.mean(metric_i, axis=0)[0], np.mean(metric_i, axis=0)[1]))
@@ -81,8 +91,8 @@ if __name__ == "__main__":
     dataset_config = {
         'Synapse': {
             'Dataset': Synapse_dataset,
-            'volume_path': '../data/Synapse/test_vol_h5',
-            'list_dir': './lists/lists_Synapse',
+            'volume_path': '/home/ubuntu/files/project_TransUNet/data/Synapse/test_vol_h5',
+            'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Synapse",
             'num_classes': 9,
             'z_spacing': 1,
         },
@@ -131,10 +141,11 @@ if __name__ == "__main__":
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
     logging.info(snapshot_name)
+    writer = SummaryWriter(log_folder)
 
-    if args.is_savenii:
-        args.test_save_dir = '../predictions'
-        test_save_path = os.path.join(args['test_save_dir'], args['exp'], snapshot_name)
+    if args['is_savenii']:
+        args['test_save_dir'] = '../predictions'
+        test_save_path = "/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/predictions"
         os.makedirs(test_save_path, exist_ok=True)
     else:
         test_save_path = None
