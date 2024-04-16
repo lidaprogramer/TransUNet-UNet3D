@@ -59,16 +59,17 @@ def inference(args, model, test_save_path=None):
         image_display = image[:, 3*image.shape[1]//4, :, :]
         label_display = label[:, 3*label.shape[1]//4, :, :]
         image_display = (image_display - image_display.min()) / (image_display.max() - image_display.min())
-        writer.add_image('Test_image', image_display, 0)
-        writer.add_image('Ground_Truth', label_display*50, 0)
+        writer.add_image('Test_image', image_display, i_batch)
+        writer.add_image('Ground_Truth', label_display*50, i_batch)
         metric_i, prediction = test_single_volume(image, label, model, classes=args['num_classes'], patch_size=[args['img_size'], args['img_size']],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args['z_spacing'])
         prediction_tensor = torch.from_numpy(prediction)  # Convert numpy array to tensor
         prediction_display = prediction_tensor[3*prediction_tensor.shape[0]//4, :, :].unsqueeze(0)
-        writer.add_image('Prediction', prediction_display*50, 0)                              
+        writer.add_image('Prediction', prediction_display*50, i_batch)                              
         metric_list += np.array(metric_i)
-        writer.add_scalar('mean dice', np.mean(metric_i, axis=0)[0], 0)
-        writer.add_scalar('mean_hd95', np.mean(metric_i, axis=0)[1], 0)
+        mean_dice = np.mean(metric_i, axis=0)[0]
+        mean_hd95 = np.mean(metric_i, axis=0)[1]
+        writer.add_text('Metrics', f'idx {i_batch} case {case_name} mean_dice {mean_dice:.4f} mean_hd95 {mean_hd95:.4f}')
         logging.info('idx %d case %s mean_dice %f mean_hd95 %f' % (i_batch, case_name, np.mean(metric_i, axis=0)[0], np.mean(metric_i, axis=0)[1]))
     metric_list = metric_list / len(db_test)
     for i in range(1, args['num_classes']):
