@@ -52,19 +52,23 @@ def inference(args, model, test_save_path=None):
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
     metric_list = 0.0
+    writer = SummaryWriter("/home/ubuntu/files/project_TransUNet/TransUNet/test_log/test_log_TU_Synapse224/")
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         h, w = sampled_batch["image"].size()[2:]
         image, label, case_name = sampled_batch["image"], sampled_batch["label"], sampled_batch['case_name'][0]
+        image_display = image[:, 3*image.shape[1]//4, :, :]
+        label_display = label[:, 3*label.shape[1]//4, :, :]
+        image_display = (image_display - image_display.min()) / (image_display.max() - image_display.min())
+        writer.add_image('Test_image', image_display, 0)
+        writer.add_image('Ground_Truth', label_display*50, 0)
         metric_i, prediction = test_single_volume(image, label, model, classes=args['num_classes'], patch_size=[args['img_size'], args['img_size']],
                                       test_save_path=test_save_path, case=case_name, z_spacing=args['z_spacing'])
-        image = (image - image.min()) / (image.max() - image.min())
-        writer.add_image('input/Image', image, iter_num)
-        outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
-        writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num)
-        labs = label_batch[1, ...].unsqueeze(0) * 50
-        writer.add_image('train/GroundTruth', labs, iter_num)
-                              
+        prediction_tensor = torch.from_numpy(prediction)  # Convert numpy array to tensor
+        prediction_display = prediction_tensor[3*prediction_tensor.shape[0]//4, :, :].unsqueeze(0)
+        writer.add_image('Prediction', prediction_display*50, 0)                              
         metric_list += np.array(metric_i)
+        writer.add_scalar('mean dice', np.mean(metric_i, axis=0)[0], 0)
+        writer.add_scalar('mean_hd95', np.mean(metric_i, axis=0)[1], 0)
         logging.info('idx %d case %s mean_dice %f mean_hd95 %f' % (i_batch, case_name, np.mean(metric_i, axis=0)[0], np.mean(metric_i, axis=0)[1]))
     metric_list = metric_list / len(db_test)
     for i in range(1, args['num_classes']):
