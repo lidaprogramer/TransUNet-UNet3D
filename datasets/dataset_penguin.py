@@ -46,7 +46,7 @@ class RandomGenerator(object):
         return sample
 
 
-class Synapse_dataset(Dataset):
+class Penguin_dataset(Dataset):
     def __init__(self, base_dir, list_dir, split, transform=None):
         self.transform = transform  
         self.split = split
@@ -73,4 +73,3 @@ class Synapse_dataset(Dataset):
             sample = self.transform(sample)
         sample['case_name'] = self.sample_list[idx].strip('\n')
         return sample
-    
