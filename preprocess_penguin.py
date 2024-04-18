@@ -4,6 +4,41 @@ import numpy as np
 import shutil
 import h5py
 
+def resize_and_pad_image(image_array, target_size=(512, 512), pad_value=0):
+    """
+    Resize the image array to target size and pad if necessary.
+    """
+    image_sitk = sitk.GetImageFromArray(image_array)
+    original_size = image_sitk.GetSize()
+    original_spacing = image_sitk.GetSpacing()
+
+    new_spacing = [
+        original_spacing[0] * original_size[0] / target_size[0],
+        original_spacing[1] * original_size[1] / target_size[1]
+    ]
+
+    # Resize the image
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetOutputSpacing(new_spacing)
+    resampler.SetSize(target_size)
+    resampler.SetInterpolator(sitk.sitkLinear)
+    resampler.SetOutputOrigin(image_sitk.GetOrigin())
+    resampler.SetOutputDirection(image_sitk.GetDirection())
+    resized_image = resampler.Execute(image_sitk)
+
+    # Convert back to array
+    resized_array = sitk.GetArrayFromImage(resized_image)
+
+    # Padding if the resized image is smaller than the target size
+    padding_needed = [max(0, target_size[i] - resized_array.shape[i]) for i in range(2)]
+    if any(padding_needed):
+        pad_width = [(0, padding_needed[i]) for i in range(2)]
+        padded_array = np.pad(resized_array, pad_width, mode='constant', constant_values=pad_value)
+    else:
+        padded_array = resized_array
+
+    return padded_array
+
 def process_images(image_dir, label_dir, output_dir, test_dir):
     # Ensure the output directories exist
     if not os.path.exists(output_dir):
@@ -38,8 +73,8 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
         
         # Save each slice and corresponding label slice as separate npz files
         for slice_index in range(image_array.shape[0]):
-            slice_image = image_array[slice_index, :, :]
-            slice_label = label_array[slice_index, :, :]
+            slice_image = resize_and_pad_image(image_array[slice_index, :, :])
+            slice_label = resize_and_pad_image(label_array[slice_index, :, :])
             
             print(slice_image.shape)
             # Save slice image and label in an npz file

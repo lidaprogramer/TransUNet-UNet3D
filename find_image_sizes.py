@@ -12,7 +12,7 @@ def find_unique_image_sizes(directory1, directory2):
     plot_limit = 25
     images_plotted = 0
 
-    for file, label_file in image_files, label_files:
+    for file, label_file in zip(image_files, label_files):
         file_path = os.path.join(directory1, file)
         image = sitk.ReadImage(file_path)
         label = sitk.ReadImage(os.path.join(directory2, label_file))
