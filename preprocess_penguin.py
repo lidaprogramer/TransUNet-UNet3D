@@ -71,6 +71,8 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
         image_array = sitk.GetArrayFromImage(image)  # Convert to numpy array
         label_array = sitk.GetArrayFromImage(label)  # Convert label to numpy array
         
+        image_array = np.clip(image_array, 0, 4000)
+        image_array = (image_array - image_array.min()) / (image_array.max() - image_array.min())
         # Save each slice and corresponding label slice as separate npz files
         for slice_index in range(image_array.shape[0]):
             slice_image = resize_and_pad_image(image_array[slice_index, :, :])
@@ -93,6 +95,8 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
         image_array = sitk.GetArrayFromImage(image)  # Convert to numpy array
         label_array = sitk.GetArrayFromImage(label)  # Convert label to numpy array
         
+        image_array = np.clip(image_array, 0, 4000)
+        image_array = (image_array - image_array.min()) / (image_array.max() - image_array.min())
         # Save image and label in a .npy.h5 file
         output_file_name = os.path.splitext(file)[0] + '.npy.h5'
         with h5py.File(os.path.join(test_dir, output_file_name), 'w') as hf:

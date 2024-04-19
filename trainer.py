@@ -33,22 +33,6 @@ def trainer_synapse(args, model, snapshot_path):
                                    [RandomGenerator(output_size=[args['img_size'], args['img_size']])]))
     print("The length of train set is: {}".format(len(db_train)))
     
-    import matplotlib.pyplot as plt
-    image = np.squeeze(db_train[0]['image'].permute(1, 2, 0).numpy() ) # Permute for color images
-    # Normalize or rescale the image
-    if image.min() < 0:  # Assuming the range is [-1, 1]
-        image = (image + 1) / 2  # Rescale to [0, 1]
-    image = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-
-    # Convert to PIL Image
-    image_pil = Image.fromarray(image)
-
-    # Convert to PIL Image
-    image_pil = Image.fromarray(np.uint8(image))  # Convert to uint8
-
-    # Save the image
-    image_pil.save('image.png')
-    
     def worker_init_fn(worker_id):
         random.seed(args['seed'] + worker_id)
 
@@ -112,8 +96,9 @@ def trainer_synapse(args, model, snapshot_path):
             break
 
 def trainer_penguin(args, model, snapshot_path):
+    
     from datasets.dataset_penguin import Penguin_dataset, RandomGenerator
-    logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
+    logging.basicConfig(filename="/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/log_penguin/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
@@ -126,18 +111,6 @@ def trainer_penguin(args, model, snapshot_path):
                                    [RandomGenerator(output_size=[args['img_size'], args['img_size']])]))
     print("The length of train set is: {}".format(len(db_train)))
     
-    import matplotlib.pyplot as plt
-    image = np.squeeze(db_train[0]['image'].permute(1, 2, 0).numpy() ) # Permute for color images
-    # Normalize or rescale the image
-    if image.min() < 0:  # Assuming the range is [-1, 1]
-        image = (image + 1) / 2  # Rescale to [0, 1]
-    image = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-
-    # Convert to PIL Image
-    image_pil = Image.fromarray(image)
-
-    # Convert to PIL Image
-    image_pil = Image.fromarray(np.uint8(image))  # Convert to uint8
     
     def worker_init_fn(worker_id):
         random.seed(args['seed'] + worker_id)
@@ -150,7 +123,7 @@ def trainer_penguin(args, model, snapshot_path):
     ce_loss = CrossEntropyLoss()
     dice_loss = DiceLoss(num_classes)
     optimizer = optim.SGD(model.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
-    writer = SummaryWriter(snapshot_path + '/log')
+    writer = SummaryWriter("/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/log_penguin/")
     iter_num = 0
     max_epoch = args['max_epochs']
     max_iterations = args['max_epochs'] * len(trainloader)  # max_epoch = max_iterations // len(trainloader) + 1

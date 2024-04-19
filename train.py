@@ -7,6 +7,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+from networks.vit_seg_modeling import SegmentationHead
 from trainer import trainer_penguin
 
 # %%
@@ -15,7 +16,7 @@ args = {
     'root_path': '../data/Penguin/train_processed_224',
     'dataset': 'Penguin',
     'list_dir': './lists/lists_Penguin',
-    'num_classes': 9,
+    'num_classes': 30,
     'max_iterations': 30000,
     'max_epochs': 150,
     'batch_size': 24,
@@ -53,7 +54,7 @@ if __name__ == "__main__":
         'Penguin': {
             'root_path': "/home/ubuntu/files/project_TransUNet/data/Penguin/train_processed_224",
             'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Penguin",
-            'num_classes': 9,
+            'num_classes': 30,
         },
     }
     args['num_classes'] = dataset_config[dataset_name]['num_classes']
@@ -79,15 +80,21 @@ if __name__ == "__main__":
     if not os.path.exists(snapshot_path):
         os.makedirs(snapshot_path)
     config_vit = CONFIGS_ViT_seg[args['vit_name']]
-    config_vit.n_classes = args['num_classes']
+    config_vit.n_classes = 9
     config_vit.n_skip = args['n_skip']
     config_vit.pretrained_path = "/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz"
     if args['vit_name'].find('R50') != -1:
         config_vit.patches.grid = (int(args['img_size'] / args['vit_patches_size']), int(args['img_size'] / args['vit_patches_size']))
-    net = ViT_seg(config_vit, img_size=args['img_size'], num_classes=config_vit.n_classes).cuda()
+    net = ViT_seg(config_vit, img_size=args['img_size'], num_classes=9).cuda()
     
     #net.load_from(weights=np.load(config_vit.pretrained_path))
     net.load_state_dict(torch.load("/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/epoch_59.pth"))
+
+    net.segmentation_head = SegmentationHead(
+        in_channels=config_vit['decoder_channels'][-1],
+        out_channels= args['num_classes'], 
+        kernel_size=3
+    ).cuda()
 
     trainer = {'Penguin': trainer_penguin}
     trainer[dataset_name](args, net, snapshot_path)
