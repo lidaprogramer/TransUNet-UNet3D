@@ -7,14 +7,14 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from trainer import trainer_synapse
+from trainer import trainer_penguin
 
 # %%
 # Manually setting what previously were command-line arguments
 args = {
-    'root_path': '../data/Synapse/train_npz',
-    'dataset': 'Synapse',
-    'list_dir': './lists/lists_Synapse',
+    'root_path': '../data/Penguin/train_processed_224',
+    'dataset': 'Penguin',
+    'list_dir': './lists/lists_Penguin',
     'num_classes': 9,
     'max_iterations': 30000,
     'max_epochs': 150,
@@ -50,9 +50,9 @@ if __name__ == "__main__":
     torch.cuda.manual_seed(args['seed'])
     dataset_name = args['dataset']
     dataset_config = {
-        'Synapse': {
-            'root_path': "/home/ubuntu/files/project_TransUNet/data/Synapse/train_npz",
-            'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Synapse",
+        'Penguin': {
+            'root_path': "/home/ubuntu/files/project_TransUNet/data/Penguin/train_processed_224",
+            'list_dir': "/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Penguin",
             'num_classes': 9,
         },
     }
@@ -85,7 +85,9 @@ if __name__ == "__main__":
     if args['vit_name'].find('R50') != -1:
         config_vit.patches.grid = (int(args['img_size'] / args['vit_patches_size']), int(args['img_size'] / args['vit_patches_size']))
     net = ViT_seg(config_vit, img_size=args['img_size'], num_classes=config_vit.n_classes).cuda()
-    net.load_from(weights=np.load(config_vit.pretrained_path))
+    
+    #net.load_from(weights=np.load(config_vit.pretrained_path))
+    net.load_state_dict(torch.load("/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/epoch_59.pth"))
 
-    trainer = {'Synapse': trainer_synapse}
+    trainer = {'Penguin': trainer_penguin}
     trainer[dataset_name](args, net, snapshot_path)

@@ -4,7 +4,7 @@ import numpy as np
 import shutil
 import h5py
 
-def resize_and_pad_image(image_array, target_size=(512, 512), pad_value=0):
+def resize_and_pad_image(image_array, target_size=(224, 224), pad_value=0):
     """
     Resize the image array to target size and pad if necessary.
     """
@@ -113,6 +113,6 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
 # Usage example:
 process_images('/home/ubuntu/files/project_TransUNet/data/Penguin/train',
                '/home/ubuntu/files/project_TransUNet/data/Penguin/label',
-               '/home/ubuntu/files/project_TransUNet/data/Penguin/train_processed',
-               '/home/ubuntu/files/project_TransUNet/data/Penguin/test')
+               '/home/ubuntu/files/project_TransUNet/data/Penguin/train_processed_224',
+               '/home/ubuntu/files/project_TransUNet/data/Penguin/test_224')
 
