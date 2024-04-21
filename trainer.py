@@ -95,6 +95,66 @@ def trainer_synapse(args, model, snapshot_path):
             iterator.close()
             break
 
+def validate_model(model, data_directory, batch_size, ce_loss, dice_loss, device, writer, iter_num):
+    model.eval()
+    val_loss = 0
+    total_samples = 0
+    with torch.no_grad():
+        images_list = []
+        labels_list = []
+        for file in os.listdir(data_directory):
+            full_path = os.path.join(data_directory, file)
+            data = np.load(full_path)
+            image, label = data['image'], data['label']
+
+            # Convert numpy arrays to tensors and add batch dimension if missing
+            image_tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).float().to(device)
+            label_tensor = torch.from_numpy(label).unsqueeze(0).unsqueeze(0).float().to(device)
+
+            images_list.append(image_tensor)
+            labels_list.append(label_tensor)
+            
+            kol = 0
+            # Check if we have gathered a full batch
+            if len(images_list) == batch_size:
+                batch_images = torch.cat(images_list)
+                batch_labels = torch.cat(labels_list)
+                loss, outputs = process_batch(batch_images, batch_labels, model, ce_loss, dice_loss)
+                val_loss += loss
+                images_list = []
+                labels_list = []
+                writer.add_scalar('info/val_loss', loss, iter_num+kol)
+                kol += 1
+
+                if kol % 2 == 0:
+                    image = batch_images[1, 0:1, :, :]
+                    image = (image - image.min()) / (image.max() - image.min())
+                    writer.add_image('val/Image', image, iter_num+kol)
+                    outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
+                    writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num+kol)
+                    labs = batch_labels[1, ...].unsqueeze(0) * 50
+                    writer.add_image('train/GroundTruth', labs, iter_num+kol)    
+
+        # Process the last batch if it has fewer than batch_size images
+        if images_list:
+            batch_images = torch.cat(images_list)
+            batch_labels = torch.cat(labels_list)
+            loss, outputs = process_batch(batch_images, batch_labels, model, ce_loss, dice_loss)
+            val_loss += loss
+            writer.add_scalar('info/val_loss', loss, iter_num+kol)
+
+
+    model.train()  # Reset to training mode
+
+
+def process_batch(images, labels, model, ce_loss, dice_loss):
+    outputs = model(images)
+    loss_ce = ce_loss(outputs, labels[:].squeeze().long())
+    loss_dice = dice_loss(outputs, labels.squeeze(), softmax=True)
+    loss = 0.5 * loss_ce + 0.5 * loss_dice
+    return loss, outputs
+
+
 def trainer_penguin(args, model, snapshot_path):
     
     from datasets.dataset_penguin import Penguin_dataset, RandomGenerator
@@ -162,40 +222,8 @@ def trainer_penguin(args, model, snapshot_path):
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
         
-        model.eval()
-        val_loss = 0
-        kol = 0
-        with torch.no_grad():
-            for file in os.listdir('/home/ubuntu/files/project_TransUNet/data/Penguin/val_224'):
-                full_path = os.path.join('/home/ubuntu/files/project_TransUNet/data/Penguin/val_224', file)
-                data = np.load(full_path)
-                images, labels = data['image'], data['label']
-
-                if isinstance(images, np.ndarray):
-                    images = torch.from_numpy(images)
-                if isinstance(labels, np.ndarray):
-                    labels = torch.from_numpy(labels)
-
-                images, labels = images.to(device), labels.to(device)
-
-                outputs = model(images)            
-                loss_ce = ce_loss(outputs, labels.long())  # Ensure labels are long for CE loss
-                loss_dice = dice_loss(outputs, labels, softmax=True)
-                loss = 0.5 * loss_ce + 0.5 * loss_dice
-                val_loss += loss.item()
-                kol += 1
-                if kol % 20 == 0:
-                    image = (images - images.min()) / (images.max() - images.min())
-                    writer.add_image('val/Image', image, iter_num+kol)
-                    outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
-                    writer.add_image('val/Prediction', outputs[1, ...] * 50, iter_num+kol)
-                    labs = labels[1, ...].unsqueeze(0) * 50
-                    writer.add_image('val/GroundTruth', labs, iter_num+kol)
-                
-        avg_loss = val_loss / kol
-        writer.add_scalar('info/loss_val', avg_loss, iter_num)
-        model.train()
-
+            validate_model(model, '/home/ubuntu/files/project_TransUNet/data/Penguin/val_224', 24, ce_loss, dice_loss, 'cuda', writer, iter_num)
+          
         save_interval = 3  # int(max_epoch/6)
         if epoch_num  % save_interval == 0:
             save_mode_path = os.path.join(snapshot_path, 'epoch_' + str(epoch_num) + '.pth')

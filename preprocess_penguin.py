@@ -51,14 +51,14 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
     np.random.shuffle(image_files)  # Randomly shuffle files
     
     # Split into train and test sets
-    split_index = int(0.8 * len(image_files))
+    split_index = int(0.9 * len(image_files))
     train_files = image_files[:split_index]
     test_files = image_files[split_index:]
     
     # Create text files to store the image names
-    train_list = open(os.path.join(output_dir, 'train.txt'), 'w')
-    test_list = open(os.path.join(test_dir, 'test_vol.txt'), 'w')
-    all_list = open(os.path.join(image_dir, 'all.lst'), 'w')
+    train_list = open('/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Penguin/train.txt', 'w')
+    test_list = open('/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Penguin/test_vol.txt', 'w')
+    all_list = open('/home/ubuntu/files/project_TransUNet/TransUNet/lists/lists_Penguin/all.lst', 'w')
     
     # Process train files
     for file in train_files:
@@ -97,13 +97,17 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
         
         image_array = np.clip(image_array, 0, 4000)
         image_array = (image_array - image_array.min()) / (image_array.max() - image_array.min())
-        # Save image and label in a .npy.h5 file
-        output_file_name = os.path.splitext(file)[0] + '.npy.h5'
-        with h5py.File(os.path.join(test_dir, output_file_name), 'w') as hf:
-            hf.create_dataset('image', data=image_array, compression='gzip')
-            hf.create_dataset('label', data=label_array, compression='gzip')
-        test_list.write(output_file_name + '\n')
+        for slice_index in range(image_array.shape[0]):
+            slice_image = resize_and_pad_image(image_array[slice_index, :, :])
+            slice_label = resize_and_pad_image(label_array[slice_index, :, :])
 
+            # Debug print to verify slice shapes
+            print(f"Processing {file}, slice {slice_index}: shape {slice_image.shape}")
+
+            # Save slice image and label in an npz file
+            output_file_name = os.path.splitext(file)[0] + f"_slice{slice_index:03d}.npz"
+            np.savez_compressed(os.path.join(test_dir, output_file_name), image=slice_image, label=slice_label)
+            test_list.write(output_file_name + '\n')
 
     # Populate the all.lst
     for file in image_files:
@@ -118,5 +122,5 @@ def process_images(image_dir, label_dir, output_dir, test_dir):
 process_images('/home/ubuntu/files/project_TransUNet/data/Penguin/train',
                '/home/ubuntu/files/project_TransUNet/data/Penguin/label',
                '/home/ubuntu/files/project_TransUNet/data/Penguin/train_processed_224',
-               '/home/ubuntu/files/project_TransUNet/data/Penguin/test_224')
+               '/home/ubuntu/files/project_TransUNet/data/Penguin/val_224')
 
