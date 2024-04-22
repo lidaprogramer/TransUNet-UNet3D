@@ -120,13 +120,12 @@ def validate_model(model, data_directory, batch_size, ce_loss, dice_loss, device
                 batch_images = torch.cat(images_list)
                 batch_labels = torch.cat(labels_list)
                 loss, outputs = process_batch(batch_images, batch_labels, model, ce_loss, dice_loss)
-                val_loss += loss
                 images_list = []
                 labels_list = []
                 writer.add_scalar('info/val_loss', loss, iter_num+kol)
                 kol += 1
 
-                if kol % 2 == 0:
+                if kol % 10 == 0:
                     image = batch_images[1, 0:1, :, :]
                     image = (image - image.min()) / (image.max() - image.min())
                     writer.add_image('val/Image', image, iter_num+kol)
@@ -222,7 +221,7 @@ def trainer_penguin(args, model, snapshot_path):
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
         
-            validate_model(model, '/home/ubuntu/files/project_TransUNet/data/Penguin/val_224', 24, ce_loss, dice_loss, 'cuda', writer, iter_num)
+        validate_model(model, '/home/ubuntu/files/project_TransUNet/data/Penguin/val_224', 24, ce_loss, dice_loss, 'cuda', writer, iter_num)
           
         save_interval = 3  # int(max_epoch/6)
         if epoch_num  % save_interval == 0:
