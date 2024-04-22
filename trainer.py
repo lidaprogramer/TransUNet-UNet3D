@@ -131,9 +131,9 @@ def validate_model(model, data_directory, batch_size, ce_loss, dice_loss, device
                     image = (image - image.min()) / (image.max() - image.min())
                     writer.add_image('val/Image', image, iter_num+kol)
                     outputs = torch.argmax(torch.softmax(outputs, dim=1), dim=1, keepdim=True)
-                    writer.add_image('train/Prediction', outputs[1, ...] * 50, iter_num+kol)
+                    writer.add_image('val/Prediction', outputs[1, ...] * 50, iter_num+kol)
                     labs = batch_labels[1, ...].unsqueeze(0) * 50
-                    writer.add_image('train/GroundTruth', labs, iter_num+kol)    
+                    writer.add_image('val/GroundTruth', labs, iter_num+kol)    
 
         # Process the last batch if it has fewer than batch_size images
         if images_list:
