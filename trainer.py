@@ -140,13 +140,23 @@ def trainer_penguin(args, model, snapshot_path):
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
     best_performance = 0.0
     iterator = tqdm(range(max_epoch), ncols=70)
+
+    class_weights = torch.tensor([1.97288597e-07, 3.96445289e-05, 3.17975748e-04, 7.10543115e-04,
+                              1.02018914e-03, 1.03861384e-03, 1.00895855e-03, 1.18726043e-03,
+                              1.10602507e-03, 9.15400192e-04, 1.02374106e-03, 2.69684280e-05,
+                              3.53018914e-04, 6.14111846e-04, 1.98149530e-03, 2.06013121e-03,
+                              4.09716955e-03, 2.97664854e-03, 1.91125018e-03, 2.64694398e-03,
+                              2.73462262e-03, 2.71537110e-05, 3.93861040e-04, 6.55661204e-04,
+                              7.85597368e-03, 1.92659288e-01, 1.92659288e-01, 1.92659288e-01,
+                              1.92659288e-01, 1.92659288e-01]).to(score.device)
+
     for epoch_num in iterator:
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             image_batch, label_batch = image_batch.cuda(), label_batch.cuda()
             outputs = model(image_batch)
             loss_ce = ce_loss(outputs, label_batch[:].long())
-            loss_dice = dice_loss(outputs, label_batch, softmax=True)
+            loss_dice = dice_loss(outputs, label_batch, weight=class_weights, softmax=True)
             loss = 0.2 * loss_ce + 0.8 * loss_dice
             optimizer.zero_grad()
             loss.backward()
@@ -213,13 +223,12 @@ def trainer_penguin(args, model, snapshot_path):
                 batch_images = torch.cat(images_list)
                 batch_labels = torch.cat(labels_list)
                 loss, outputs = process_batch(batch_images, batch_labels, model, ce_loss, dice_loss)
-                writer.add_scalar('info/val_loss', loss, iter_num+kol)
                 val_loss += loss.item()
                 kol += 1
             # Compute average validation loss
             if kol > 0:
                 average_val_loss = val_loss / kol
-                writer.add_scalar('info/total_loss', average_val_loss, iter_num)
+                writer.add_scalar('info/val_loss', average_val_loss, iter_num)
             else:
                 print("No batches processed.")    
           

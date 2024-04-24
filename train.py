@@ -80,7 +80,7 @@ if __name__ == "__main__":
     if not os.path.exists(snapshot_path):
         os.makedirs(snapshot_path)
     config_vit = CONFIGS_ViT_seg[args['vit_name']]
-    config_vit.n_classes = 30
+    config_vit.n_classes = 9
     config_vit.n_skip = args['n_skip']
     config_vit.pretrained_path = "/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz"
     if args['vit_name'].find('R50') != -1:
