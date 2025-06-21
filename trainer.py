@@ -223,7 +223,12 @@ def trainer_imagecas(args, model, snapshot_path):
                 rgb[0] = torch.where(pred > 0, alpha*1.0 + (1-alpha)*rgb[0], rgb[0])
 
                 # --------------------------------------------------------
-                writer.add_image('train/overlay', rgb, iter_num)     # RGB imag
+                writer.add_image('train/overlay', rgb, iter_num)     # RGB image
+
+                # keep the individual channels if you still want them
+                writer.add_image('train/image',      base.unsqueeze(0), iter_num)
+                writer.add_image('train/prediction', pred.unsqueeze(0)*50, iter_num)
+                writer.add_image('train/label',      gt.unsqueeze(0)*50,   iter_num)
 
 
             iter_num += 1
@@ -244,8 +249,11 @@ def trainer_imagecas(args, model, snapshot_path):
                 v_ce   = ce_loss(v_out, v_lbl.long())
                 v_dice = dice_loss(v_out, v_lbl, softmax=True)
                 val_loss += 0.5 * v_ce + 0.5 * v_dice
+                val_pred = torch.argmax(torch.softmax(v_out,1),1)
         val_loss /= len(val_loader)
         writer.add_scalar('val_loss', val_loss, epoch)
+        v_rgb = make_overlay(v_img[0,0], v_lbl[0], val_pred[0])  # helper below
+        writer.add_image('val/overlay', v_rgb, epoch)
         model.train()
         # ------------------------------------------------------
           
@@ -253,6 +261,31 @@ def trainer_imagecas(args, model, snapshot_path):
     writer.close()
     return "ImageCas training finished!"
 
+def make_overlay(slice_img,       # (H,W) – INPUT CT, range 0‥1
+                 gt_mask,         # (H,W) – 0/1 ground-truth
+                 pred_mask,       # (H,W) – 0/1 prediction
+                 alpha=0.6):      # overlay opacity
+    """
+    Return an RGB tensor (3,H,W) where
+        • GT pixels are green    (G channel boosted)
+        • Predicted pixels are red (R channel boosted)
+        • Overlap will look yellow
+    All inputs are torch.Tensors on *the same device*.
+    """
+    # start with gray-scale -> 3-chan copy
+    rgb = torch.stack([slice_img, slice_img, slice_img], dim=0).clone()
+
+    # Green = GT
+    rgb[1] = torch.where(gt_mask > 0,
+                         alpha*1.0 + (1-alpha)*rgb[1],
+                         rgb[1])
+
+    # Red = prediction
+    rgb[0] = torch.where(pred_mask > 0,
+                         alpha*1.0 + (1-alpha)*rgb[0],
+                         rgb[0])
+
+    return rgb.clamp(0, 1)
 
 def trainer_penguin(args, model, snapshot_path):
     
