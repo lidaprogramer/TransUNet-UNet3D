@@ -104,6 +104,156 @@ def process_batch(images, labels, model, ce_loss, dice_loss):
     return loss, outputs
 
 
+def trainer_imagecas(args, model, snapshot_path):
+    """
+    Train TransUNet (or any torch model) on the pre-processed ImageCas slices.
+    """
+    from datasets.dataset_imagecas import ImageCas_dataset, RandomGenerator
+
+    # ---------- Logging ----------
+    log_dir = os.path.join(snapshot_path, "log_imagecas")
+    os.makedirs(log_dir, exist_ok=True)
+    logging.basicConfig(filename=os.path.join(log_dir, "log.txt"),
+                        level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s',
+                        datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(args))
+
+    # ---------- Data ----------
+    base_lr   = args['base_lr']
+    n_cls     = args['num_classes']
+    batch_sz  = args['batch_size'] * args['n_gpu']
+
+    db_train = ImageCas_dataset(
+        base_dir=args['root_path'],
+        list_dir=args['list_dir'],
+        split="train",
+        transform=transforms.Compose(
+            [RandomGenerator(output_size=[args['img_size'], args['img_size']])]
+        ),
+    )
+    logging.info("Train set size: %d", len(db_train))
+
+    def worker_init_fn(worker_id):
+        random.seed(args['seed'] + worker_id)
+
+    trainloader = DataLoader(db_train,
+                             batch_size=batch_sz,
+                             shuffle=True,
+                             num_workers=8,
+                             pin_memory=True,
+                             worker_init_fn=worker_init_fn)
+    db_val = ImageCas_dataset(
+        base_dir=args['root_path'],
+        list_dir=args['list_dir'],
+        split="val",
+        transform=transforms.Compose(
+            [RandomGenerator(output_size=[args['img_size'], args['img_size']])]
+        ),
+    )
+    val_loader = DataLoader(
+        db_val, batch_size=batch_sz, shuffle=False,
+        num_workers=4, pin_memory=True
+    )
+
+    # ---------- Model / loss / opt ----------
+    if args['n_gpu'] > 1:
+        model = nn.DataParallel(model)
+    model.train()
+
+    ce_loss   = CrossEntropyLoss()
+    dice_loss = DiceLoss(n_cls)
+    optimizer = optim.SGD(model.parameters(),
+                          lr=base_lr,
+                          momentum=0.9,
+                          weight_decay=1e-4)
+
+    writer = SummaryWriter(log_dir)
+    max_epoch       = args['max_epochs']
+    max_iterations  = max_epoch * len(trainloader)
+
+    logging.info("%d iters / epoch, %d max iters", len(trainloader), max_iterations)
+    iter_num = 0
+
+    # ---------- Training loop ----------
+    for epoch in tqdm(range(max_epoch), ncols=70):
+        for i_batch, batch in enumerate(trainloader):
+            imgs, labs = batch['image'].cuda(), batch['label'].cuda()
+
+            outs = model(imgs)
+            loss_ce   = ce_loss(outs, labs.long())
+            loss_dice = dice_loss(outs, labs, softmax=True)
+            loss      = 0.5 * loss_ce + 0.5 * loss_dice
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # poly LR schedule
+            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+            for pg in optimizer.param_groups:
+                pg['lr'] = lr_
+
+            # ---------- logging ----------
+            if iter_num % 10 == 0:
+                writer.add_scalar('lr',         lr_,   iter_num)
+                writer.add_scalar('loss_total', loss,   iter_num)
+                writer.add_scalar('loss_ce',    loss_ce,iter_num)
+
+            if iter_num % 50 == 0:
+                # -------- base CT slice (windowed) -----------------------
+                WL, WW = 50, 2000
+                lower, upper = WL - WW/2, WL + WW/2
+                slice_hu = imgs[0, 0] * 4000                # back-to HU scale
+                base = torch.clamp(slice_hu - lower, 0, WW) / WW   # 0‥1   (H,W)
+
+                H, W = base.shape
+                rgb = torch.stack([base, base, base], dim=0)        # (3,H,W)
+
+                # -------- masks -----------------------------------------
+                gt   = (labs[0] > 0).float()            # (H,W)
+                pred = torch.argmax(torch.softmax(outs, 1), 1)[0].float()
+
+                alpha = 0.6                             # transparency
+
+                # green for GT
+                rgb[1] = torch.where(gt > 0, alpha*1.0 + (1-alpha)*rgb[1], rgb[1])
+                # red for prediction
+                rgb[0] = torch.where(pred > 0, alpha*1.0 + (1-alpha)*rgb[0], rgb[0])
+
+                # --------------------------------------------------------
+                writer.add_image('train/overlay', rgb, iter_num)     # RGB imag
+
+
+            iter_num += 1
+
+        # ---------- checkpoint ----------
+        if (epoch+1) % 10 == 0 or epoch == max_epoch-1:
+            ckpt = os.path.join(snapshot_path, f"imagecas_epoch_{epoch}.pth")
+            torch.save(model.state_dict(), ckpt)
+            logging.info("Saved checkpoint to %s", ckpt)
+          # ---------------- VALIDATION PASS --------------------
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for v_batch in val_loader:
+                v_img  = v_batch['image'].cuda()
+                v_lbl  = v_batch['label'].cuda()
+                v_out  = model(v_img)
+                v_ce   = ce_loss(v_out, v_lbl.long())
+                v_dice = dice_loss(v_out, v_lbl, softmax=True)
+                val_loss += 0.5 * v_ce + 0.5 * v_dice
+        val_loss /= len(val_loader)
+        writer.add_scalar('val_loss', val_loss, epoch)
+        model.train()
+        # ------------------------------------------------------
+          
+
+    writer.close()
+    return "ImageCas training finished!"
+
+
 def trainer_penguin(args, model, snapshot_path):
     
     from datasets.dataset_penguin import Penguin_dataset, RandomGenerator
@@ -148,7 +298,7 @@ def trainer_penguin(args, model, snapshot_path):
                               4.09716955e-03, 2.97664854e-03, 1.91125018e-03, 2.64694398e-03,
                               2.73462262e-03, 2.71537110e-05, 3.93861040e-04, 6.55661204e-04,
                               7.85597368e-03, 1.92659288e-01, 1.92659288e-01, 1.92659288e-01,
-                              1.92659288e-01, 1.92659288e-01]).to(score.device)
+                              1.92659288e-01, 1.92659288e-01]).cuda()
 
     for epoch_num in iterator:
         for i_batch, sampled_batch in enumerate(trainloader):
