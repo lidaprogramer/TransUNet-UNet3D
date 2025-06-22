@@ -70,9 +70,12 @@ class RandomGenerator:
 
 class ImageCas_dataset(Dataset):
     """ImageCas .npz slice loader (train/val)."""
-    def __init__(self, base_dir: str, list_dir: str, split: str = 'train', transform=None):
+    def __init__(self, base_dir: str, list_dir: str, split: str = 'train', transform=None, positive_ratio:   float = 0.5,   # new
+                 cache_presence:   bool  = True):
         self.split = split.lower()
         self.transform = transform
+        self.positive_ratio = positive_ratio if self.split == "train" else 0.0
+        self.cache_presence = cache_presence and self.split == "train"
 
         list_file = 'train.txt' if self.split == 'train' else 'test_vol.txt'
         with open(os.path.join(list_dir, list_file)) as f:
@@ -80,6 +83,12 @@ class ImageCas_dataset(Dataset):
 
         self.data_dir = os.path.join(base_dir,
             'train_processed_224' if self.split == 'train' else 'val_processed_224')
+        
+        if self.cache_presence:
+            self._is_pos = []
+            for name in self.sample_list:
+                _, lbl = self._load_npz(name)
+                self._is_pos.append(bool(lbl.max()))  # True if any vessel
 
     def __len__(self):
         return len(self.sample_list)

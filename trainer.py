@@ -109,7 +109,7 @@ def trainer_imagecas(args, model, snapshot_path):
     Train TransUNet (or any torch model) on the pre-processed ImageCas slices.
     """
     from datasets.dataset_imagecas import ImageCas_dataset, RandomGenerator
-
+    from torch.utils.data import WeightedRandomSampler
     # ---------- Logging ----------
     log_dir = os.path.join(snapshot_path, "log_imagecas")
     os.makedirs(log_dir, exist_ok=True)
@@ -132,15 +132,27 @@ def trainer_imagecas(args, model, snapshot_path):
         transform=transforms.Compose(
             [RandomGenerator(output_size=[args['img_size'], args['img_size']])]
         ),
+        positive_ratio=0.6
     )
     logging.info("Train set size: %d", len(db_train))
 
     def worker_init_fn(worker_id):
         random.seed(args['seed'] + worker_id)
 
+    pos_mask = torch.tensor(db_train._is_pos, dtype=torch.bool)
+    n_pos, n_neg = pos_mask.sum().item(), (~pos_mask).sum().item()
+    r = db_train.positive_ratio
+    w_pos = r   / max(1, n_pos)
+    w_neg = (1-r) / max(1, n_neg)
+    weights = torch.where(pos_mask, torch.full_like(pos_mask, w_pos, dtype=torch.float),
+                                    torch.full_like(pos_mask, w_neg, dtype=torch.float))
+
+    sampler = WeightedRandomSampler(weights, num_samples=len(db_train), replacement=True)
+
     trainloader = DataLoader(db_train,
                              batch_size=batch_sz,
-                             shuffle=True,
+                             sampler=sampler, 
+                             #shuffle=True,
                              num_workers=8,
                              pin_memory=True,
                              worker_init_fn=worker_init_fn)
@@ -203,27 +215,18 @@ def trainer_imagecas(args, model, snapshot_path):
 
             if iter_num % 50 == 0:
                 # -------- base CT slice (windowed) -----------------------
+                idx = _pick_pos(imgs, labs)
                 WL, WW = 50, 2000
                 lower, upper = WL - WW/2, WL + WW/2
-                slice_hu = imgs[0, 0] * 4000                # back-to HU scale
-                base = torch.clamp(slice_hu - lower, 0, WW) / WW   # 0‥1   (H,W)
-
-                H, W = base.shape
-                rgb = torch.stack([base, base, base], dim=0)        # (3,H,W)
+                base  = torch.clamp(imgs[idx,0]*4000 - lower, 0, WW) / WW  # (H,W)
 
                 # -------- masks -----------------------------------------
-                gt   = (labs[0] > 0).float()            # (H,W)
-                pred = torch.argmax(torch.softmax(outs, 1), 1)[0].float()
-
-                alpha = 0.6                             # transparency
-
-                # green for GT
-                rgb[1] = torch.where(gt > 0, alpha*1.0 + (1-alpha)*rgb[1], rgb[1])
-                # red for prediction
-                rgb[0] = torch.where(pred > 0, alpha*1.0 + (1-alpha)*rgb[0], rgb[0])
+                gt    = (labs[idx] > 0).float()
+                pred  = torch.argmax(torch.softmax(outs,1), 1)[idx].float()
 
                 # --------------------------------------------------------
-                writer.add_image('train/overlay', rgb, iter_num)     # RGB image
+                writer.add_image('train/overlay',
+                     make_overlay_hu(base, gt, pred), iter_num)
 
                 # keep the individual channels if you still want them
                 writer.add_image('train/image',      base.unsqueeze(0), iter_num)
@@ -241,19 +244,32 @@ def trainer_imagecas(args, model, snapshot_path):
           # ---------------- VALIDATION PASS --------------------
         model.eval()
         val_loss = 0.0
+        overlay_done = False 
         with torch.no_grad():
             for v_batch in val_loader:
                 v_img  = v_batch['image'].cuda()
                 v_lbl  = v_batch['label'].cuda()
                 v_out  = model(v_img)
+
                 v_ce   = ce_loss(v_out, v_lbl.long())
                 v_dice = dice_loss(v_out, v_lbl, softmax=True)
                 val_loss += 0.5 * v_ce + 0.5 * v_dice
-                val_pred = torch.argmax(torch.softmax(v_out,1),1)
+                
+                if not overlay_done:             # grab first pos slice we meet
+                    idx = _pick_pos(v_img, v_lbl)
+                    WL, WW = 50, 2000
+                    base = torch.clamp(v_img[idx,0]*4000 - (WL-WW/2), 0, WW) / WW
+                    pred = torch.argmax(torch.softmax(v_out,1), 1)[idx].float()
+                    gt   = (v_lbl[idx] > 0).float()
+
+                    writer.add_image(
+                        'val/overlay',
+                        make_overlay_hu(base, gt, pred),
+                        global_step=epoch
+                    )
+                    overlay_done = True          # no more pictures this epoch
         val_loss /= len(val_loader)
         writer.add_scalar('val_loss', val_loss, epoch)
-        v_rgb = make_overlay(v_img[0,0], v_lbl[0], val_pred[0])  # helper below
-        writer.add_image('val/overlay', v_rgb, epoch)
         model.train()
         # ------------------------------------------------------
           
@@ -261,31 +277,37 @@ def trainer_imagecas(args, model, snapshot_path):
     writer.close()
     return "ImageCas training finished!"
 
-def make_overlay(slice_img,       # (H,W) – INPUT CT, range 0‥1
-                 gt_mask,         # (H,W) – 0/1 ground-truth
-                 pred_mask,       # (H,W) – 0/1 prediction
-                 alpha=0.6):      # overlay opacity
+# ------------------------------------------------------------------
+# Helper: pick the first slice that contains any foreground (= artery)
+# ------------------------------------------------------------------
+def _pick_pos(imgs, labs):
     """
-    Return an RGB tensor (3,H,W) where
-        • GT pixels are green    (G channel boosted)
-        • Predicted pixels are red (R channel boosted)
-        • Overlap will look yellow
-    All inputs are torch.Tensors on *the same device*.
+    imgs: (B, 1, H, W) float  |  labs: (B, H, W) long
+    returns index in batch (int) you can use for visualisation.
     """
-    # start with gray-scale -> 3-chan copy
-    rgb = torch.stack([slice_img, slice_img, slice_img], dim=0).clone()
+    pos = (labs > 0).view(labs.size(0), -1).any(-1)   # (B,) bool
+    idx = int(pos.nonzero(as_tuple=True)[0][0]) if pos.any() else 0
+    return idx
 
-    # Green = GT
-    rgb[1] = torch.where(gt_mask > 0,
-                         alpha*1.0 + (1-alpha)*rgb[1],
-                         rgb[1])
+# ------------------------------------------------------------------
+# helper lives near the top of trainer_imagecas.py
+# ------------------------------------------------------------------
+def make_overlay_hu(img_1ch,            # (H,W) tensor in 0‥1 after HU-window
+                    gt_mask,            # (H,W) 0/1
+                    pred_mask,          # (H,W) 0/1
+                    alpha=0.6):
+    """
+    Colour-codes a windowed CT slice:
+        GT  → green
+        Pred → red
+        Overlap → yellow
+    Returns (3,H,W) RGB tensor in 0‥1.
+    """
+    rgb = torch.stack([img_1ch, img_1ch, img_1ch], dim=0)
+    rgb[1] = torch.where(gt_mask>0, alpha*1. + (1-alpha)*rgb[1], rgb[1])  # green
+    rgb[0] = torch.where(pred_mask>0, alpha*1. + (1-alpha)*rgb[0], rgb[0])# red
+    return rgb.clamp(0,1)
 
-    # Red = prediction
-    rgb[0] = torch.where(pred_mask > 0,
-                         alpha*1.0 + (1-alpha)*rgb[0],
-                         rgb[0])
-
-    return rgb.clamp(0, 1)
 
 def trainer_penguin(args, model, snapshot_path):
     
