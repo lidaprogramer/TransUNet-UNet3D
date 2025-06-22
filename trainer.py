@@ -187,6 +187,7 @@ def trainer_imagecas(args, model, snapshot_path):
 
     logging.info("%d iters / epoch, %d max iters", len(trainloader), max_iterations)
     iter_num = 0
+    best_val = float("inf") 
 
     # ---------- Training loop ----------
     for epoch in tqdm(range(max_epoch), ncols=70):
@@ -213,7 +214,7 @@ def trainer_imagecas(args, model, snapshot_path):
                 writer.add_scalar('loss_total', loss,   iter_num)
                 writer.add_scalar('loss_ce',    loss_ce,iter_num)
 
-            if iter_num % 50 == 0:
+            if iter_num % 1000 == 0:
                 # -------- base CT slice (windowed) -----------------------
                 idx = _pick_pos(imgs, labs)
                 WL, WW = 50, 2000
@@ -236,43 +237,49 @@ def trainer_imagecas(args, model, snapshot_path):
 
             iter_num += 1
 
-        # ---------- checkpoint ----------
-        if (epoch+1) % 10 == 0 or epoch == max_epoch-1:
-            ckpt = os.path.join(snapshot_path, f"imagecas_epoch_{epoch}.pth")
-            torch.save(model.state_dict(), ckpt)
-            logging.info("Saved checkpoint to %s", ckpt)
-          # ---------------- VALIDATION PASS --------------------
-        model.eval()
-        val_loss = 0.0
-        overlay_done = False 
-        with torch.no_grad():
-            for v_batch in val_loader:
-                v_img  = v_batch['image'].cuda()
-                v_lbl  = v_batch['label'].cuda()
-                v_out  = model(v_img)
+        # ---------------- VALIDATION PASS --------------------
+        do_val = ((epoch + 1) % 10 == 0) or (epoch == max_epoch - 1)
 
-                v_ce   = ce_loss(v_out, v_lbl.long())
-                v_dice = dice_loss(v_out, v_lbl, softmax=True)
-                val_loss += 0.5 * v_ce + 0.5 * v_dice
-                
-                if not overlay_done:             # grab first pos slice we meet
-                    idx = _pick_pos(v_img, v_lbl)
-                    WL, WW = 50, 2000
-                    base = torch.clamp(v_img[idx,0]*4000 - (WL-WW/2), 0, WW) / WW
-                    pred = torch.argmax(torch.softmax(v_out,1), 1)[idx].float()
-                    gt   = (v_lbl[idx] > 0).float()
+        if do_val:
+            model.eval()
+            val_loss      = 0.0
+            overlay_done  = False
+            with torch.no_grad():
+                for v_batch in val_loader:
+                    v_img  = v_batch['image'].cuda()
+                    v_lbl  = v_batch['label'].cuda()
+                    v_out  = model(v_img)
 
-                    writer.add_image(
-                        'val/overlay',
-                        make_overlay_hu(base, gt, pred),
-                        global_step=epoch
-                    )
-                    overlay_done = True          # no more pictures this epoch
-        val_loss /= len(val_loader)
-        writer.add_scalar('val_loss', val_loss, epoch)
-        model.train()
-        # ------------------------------------------------------
-          
+                    v_ce   = ce_loss(v_out, v_lbl.long())
+                    v_dice = dice_loss(v_out, v_lbl, softmax=True)
+                    val_loss += 0.5 * v_ce + 0.5 * v_dice
+
+                    # record ONE overlay slice per validation run
+                    if not overlay_done and _pick_pos(v_img, v_lbl) is not None:
+                        idx   = _pick_pos(v_img, v_lbl)
+                        WL, WW = 50, 2000
+                        lower  = WL - WW/2
+                        base   = torch.clamp(v_img[idx,0]*4000 - lower, 0, WW) / WW
+                        gt     = (v_lbl[idx] > 0).float()
+                        pred   = torch.argmax(torch.softmax(v_out,1), 1)[idx].float()
+
+                        writer.add_image('val/overlay',
+                                        make_overlay_hu(base, gt, pred),
+                                        global_step=epoch)
+                        overlay_done = True
+
+            val_loss /= len(val_loader)
+            writer.add_scalar('val_loss', val_loss, epoch)
+            model.train()
+
+            # checkpoint only if the new val_loss is better
+            if val_loss < best_val:
+                best_val = val_loss
+                ckpt = snapshot_path / f"imagecas_epoch_{epoch}.pth"
+                torch.save(model.state_dict(), ckpt)
+                logging.info("✅  val_loss improved to %.5f — saved %s", best_val, ckpt)
+    # ─────────────────────────────────────────────────────────────────────────────
+        # ------------------------------------------------------      
 
     writer.close()
     return "ImageCas training finished!"
