@@ -104,13 +104,74 @@ def process_batch(images, labels, model, ce_loss, dice_loss):
     return loss, outputs
 
 
+import os
+import sys
+import random
+import logging
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.nn import CrossEntropyLoss
+from torch.utils.data            import DataLoader, WeightedRandomSampler
+from torch.utils.tensorboard     import SummaryWriter
+from torchvision                 import transforms
+from tqdm.auto                   import tqdm
+
+from datasets.dataset_imagecas   import ImageCas_dataset, RandomGenerator
+
+
 def trainer_imagecas(args, model, snapshot_path):
     """
     Train TransUNet (or any torch model) on the pre-processed ImageCas slices.
     """
+
+    # ───────────────────────── imports
+    import os, random, logging, sys
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, WeightedRandomSampler
+    from torchvision import transforms
+    from torch.nn import CrossEntropyLoss
+    from torch.utils.tensorboard import SummaryWriter
+    from tqdm.auto import tqdm
+
     from datasets.dataset_imagecas import ImageCas_dataset, RandomGenerator
-    from torch.utils.data import WeightedRandomSampler
-    # ---------- Logging ----------
+
+    # ───────────────────────── quick validation helper (5 pos + 5 neg)
+    def _quick_val(model, loader, ce_loss, dice_loss,
+                   pos_target=5, neg_target=5):
+        model.eval()
+        pos_left, neg_left = pos_target, neg_target
+        val_loss, seen = 0.0, 0
+        with torch.no_grad():
+            for batch in loader:
+                imgs, lbls = batch['image'].cuda(), batch['label'].cuda()
+                outs = model(imgs)
+                is_pos = (lbls.view(lbls.size(0), -1).sum(dim=1) > 0)
+                for i in range(imgs.size(0)):
+                    if is_pos[i] and pos_left == 0:  continue
+                    if (not is_pos[i]) and neg_left == 0:  continue
+                    ce   = ce_loss(outs[i:i+1], lbls[i:i+1].long())
+                    dice = dice_loss(outs[i:i+1], lbls[i:i+1], softmax=True)
+                    val_loss += 0.5 * ce + 0.5 * dice
+                    seen += 1
+                    if is_pos[i]:  pos_left -= 1
+                    else:          neg_left -= 1
+                    if pos_left == 0 and neg_left == 0:  break
+                if pos_left == 0 and neg_left == 0:  break
+        model.train()
+        if pos_left or neg_left:
+            logging.warning(
+                "quick_val: ran out of data — %d pos, %d neg still missing",
+                pos_left, neg_left
+            )
+        return (val_loss / seen).item() if seen else float("nan")
+    # ───────────────────────────────────────────────────────────────
+
+    # ---------- Logging -------------------------------------------
     log_dir = os.path.join(snapshot_path, "log_imagecas")
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(filename=os.path.join(log_dir, "log.txt"),
@@ -120,17 +181,19 @@ def trainer_imagecas(args, model, snapshot_path):
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
 
-    # ---------- Data ----------
+    # ---------- Data ----------------------------------------------
     base_lr   = args['base_lr']
     n_cls     = args['num_classes']
     batch_sz  = args['batch_size'] * args['n_gpu']
-
+ 
+    logging.info("Starting with data")
     db_train = ImageCas_dataset(
         base_dir=args['root_path'],
         list_dir=args['list_dir'],
         split="train",
         transform=transforms.Compose(
-            [RandomGenerator(output_size=[args['img_size'], args['img_size']])]
+            [RandomGenerator(output_size=[args['img_size'],
+                                          args['img_size']])]
         ),
         positive_ratio=0.6
     )
@@ -144,34 +207,50 @@ def trainer_imagecas(args, model, snapshot_path):
     r = db_train.positive_ratio
     w_pos = r   / max(1, n_pos)
     w_neg = (1-r) / max(1, n_neg)
-    weights = torch.where(pos_mask, torch.full_like(pos_mask, w_pos, dtype=torch.float),
-                                    torch.full_like(pos_mask, w_neg, dtype=torch.float))
+    weights = torch.where(pos_mask,
+                          torch.full_like(pos_mask, w_pos, dtype=torch.float),
+                          torch.full_like(pos_mask, w_neg, dtype=torch.float))
 
-    sampler = WeightedRandomSampler(weights, num_samples=len(db_train), replacement=True)
+    sampler = WeightedRandomSampler(weights, num_samples=len(db_train),
+                                    replacement=False)# replacememnt True
 
     trainloader = DataLoader(db_train,
                              batch_size=batch_sz,
-                             sampler=sampler, 
-                             #shuffle=True,
+                             sampler=sampler,
                              num_workers=8,
                              pin_memory=True,
                              worker_init_fn=worker_init_fn)
+
     db_val = ImageCas_dataset(
         base_dir=args['root_path'],
         list_dir=args['list_dir'],
         split="val",
         transform=transforms.Compose(
-            [RandomGenerator(output_size=[args['img_size'], args['img_size']])]
+            [RandomGenerator(output_size=[args['img_size'],
+                                          args['img_size']])]
         ),
     )
     val_loader = DataLoader(
-        db_val, batch_size=batch_sz, shuffle=False,
-        num_workers=4, pin_memory=True
+        db_val,
+        batch_size=batch_sz,
+        shuffle=False,            # NEW → random sampling for quick-val & visuals
+        num_workers=4,
+        pin_memory=True
     )
 
-    # ---------- Model / loss / opt ----------
+    val_vis_loader = DataLoader(
+        db_val,
+        batch_size=batch_sz,
+        shuffle=True,           
+        num_workers=4,
+        pin_memory=True
+    )
+    val_vis_iter = iter(val_vis_loader)
+
+
+    # ---------- Model / loss / opt --------------------------------
     if args['n_gpu'] > 1:
-        model = nn.DataParallel(model)
+        model = nn.DataParallel(model.cuda())
     model.train()
 
     ce_loss   = CrossEntropyLoss()
@@ -182,104 +261,118 @@ def trainer_imagecas(args, model, snapshot_path):
                           weight_decay=1e-4)
 
     writer = SummaryWriter(log_dir)
-    max_epoch       = args['max_epochs']
-    max_iterations  = max_epoch * len(trainloader)
 
-    logging.info("%d iters / epoch, %d max iters", len(trainloader), max_iterations)
-    iter_num = 0
-    best_val = float("inf") 
+    # baseline val before first gradient step
+    init_val = _quick_val(model, val_loader, ce_loss, dice_loss)
+    writer.add_scalar('val_loss', init_val, 0)
+    logging.info("Initial val_loss: %.5f", init_val)
 
-    # ---------- Training loop ----------
+    max_epoch      = args['max_epochs']
+    max_iterations = max_epoch * len(trainloader)
+    logging.info("%d iters / epoch, %d max iters", len(trainloader),
+                 max_iterations)
+
+    iter_num, best_val = 0, float("inf")
+
+    # ---------- Training loop -------------------------------------
     for epoch in tqdm(range(max_epoch), ncols=70):
-        for i_batch, batch in enumerate(trainloader):
+
+        for batch in trainloader:
             imgs, labs = batch['image'].cuda(), batch['label'].cuda()
 
-            outs = model(imgs)
-            loss_ce   = ce_loss(outs, labs.long())
-            loss_dice = dice_loss(outs, labs, softmax=True)
-            loss      = 0.5 * loss_ce + 0.5 * loss_dice
+            outs       = model(imgs)
+            loss_ce    = ce_loss(outs, labs.long())
+            loss_dice  = dice_loss(outs, labs, softmax=True)
+            loss       = 0.5 * loss_ce + 0.5 * loss_dice
 
             optimizer.zero_grad()
             loss.backward()
+
+            # LR schedule
+            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+            for pg in optimizer.param_groups:  pg['lr'] = lr_
             optimizer.step()
 
-            # poly LR schedule
-            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-            for pg in optimizer.param_groups:
-                pg['lr'] = lr_
-
-            # ---------- logging ----------
+            # -------- scalar logs every 10 iters --------------------
             if iter_num % 10 == 0:
-                writer.add_scalar('lr',         lr_,   iter_num)
+                writer.add_scalar('lr',         lr_,    iter_num)
                 writer.add_scalar('loss_total', loss,   iter_num)
                 writer.add_scalar('loss_ce',    loss_ce,iter_num)
 
+            # -------- visuals + quick-val every 1000 iters ----------
             if iter_num % 1000 == 0:
-                # -------- base CT slice (windowed) -----------------------
-                idx = _pick_pos(imgs, labs)
+                # ── train overlay
+                idx = _pick_pos(imgs, labs);  idx = idx[0] if isinstance(idx,tuple) else idx
                 WL, WW = 50, 2000
-                lower, upper = WL - WW/2, WL + WW/2
-                base  = torch.clamp(imgs[idx,0]*4000 - lower, 0, WW) / WW  # (H,W)
+                lower  = WL - WW/2
+                base   = torch.clamp(imgs[idx,0]*4000 - lower, 0, WW) / WW
+                gt     = (labs[idx] > 0).float()
+                pred   = torch.argmax(torch.softmax(outs,1),1)[idx].float()
 
-                # -------- masks -----------------------------------------
-                gt    = (labs[idx] > 0).float()
-                pred  = torch.argmax(torch.softmax(outs,1), 1)[idx].float()
+                writer.add_image('train/overlay',     make_overlay_hu(base, gt, pred), iter_num)
+                writer.add_image('train/image',       base.unsqueeze(0),               iter_num)
+                writer.add_image('train/prediction',  pred.unsqueeze(0)*50,            iter_num)
+                writer.add_image('train/label',       gt.unsqueeze(0)*50,              iter_num)
 
-                # --------------------------------------------------------
-                writer.add_image('train/overlay',
-                     make_overlay_hu(base, gt, pred), iter_num)
+                # ── quick validation loss
+                quick_val = _quick_val(model, val_loader, ce_loss, dice_loss, pos_target=200, neg_target=50)
+                val_loss = quick_val
+                writer.add_scalar('val_loss', quick_val, iter_num)
 
-                # keep the individual channels if you still want them
-                writer.add_image('train/image',      base.unsqueeze(0), iter_num)
-                writer.add_image('train/prediction', pred.unsqueeze(0)*50, iter_num)
-                writer.add_image('train/label',      gt.unsqueeze(0)*50,   iter_num)
+                # ── validation visuals (random batch because val_loader shuffle=True)  
 
+                with torch.no_grad():
+                    try:
+                        v_batch = next(val_vis_iter)
+                    except StopIteration:               # reached end → reshuffle & restart
+                        val_vis_iter = iter(val_vis_loader)
+                        v_batch      = next(val_vis_iter)
+
+                    v_img = v_batch['image'].cuda()
+                    v_lbl = v_batch['label'].cuda()
+                    v_out = model(v_img)    
+
+                v_idx = _pick_pos(v_img, v_lbl);  v_idx = v_idx[0] if isinstance(v_idx,tuple) else v_idx
+                base_v = torch.clamp(v_img[v_idx,0]*4000 - lower, 0, WW) / WW
+                gt_v   = (v_lbl[v_idx] > 0).float()
+                pred_v = torch.argmax(torch.softmax(v_out,1),1)[v_idx].float()
+
+                writer.add_image('val/overlay',    make_overlay_hu(base_v, gt_v, pred_v), iter_num)
+                writer.add_image('val/image',      base_v.unsqueeze(0),                   iter_num)
+                writer.add_image('val/prediction', pred_v.unsqueeze(0)*50,                iter_num)
+                writer.add_image('val/label',      gt_v.unsqueeze(0)*50,                  iter_num)
+
+                if val_loss < best_val:
+                    best_val = val_loss
+                    ckpt = os.path.join(snapshot_path, f"best.pth")
+                    torch.save(model.state_dict(), ckpt)
+                    logging.info("✅  val_loss improved to %.5f — saved %s", best_val, ckpt)
+                # ----------------------------------------------------
 
             iter_num += 1
 
-        # ---------------- VALIDATION PASS --------------------
-        do_val = True#((epoch + 1) % 10 == 0) or (epoch == max_epoch - 1)
+        # ---------- full validation (unchanged) --------------------
+        model.eval()
+        val_loss, overlay_done = 0.0, False
+        with torch.no_grad():
+            for v_batch in val_loader:
+                v_img = v_batch['image'].cuda()
+                v_lbl = v_batch['label'].cuda()
+                v_out = model(v_img)
 
-        if do_val:
-            model.eval()
-            val_loss      = 0.0
-            overlay_done  = False
-            with torch.no_grad():
-                for v_batch in val_loader:
-                    v_img  = v_batch['image'].cuda()
-                    v_lbl  = v_batch['label'].cuda()
-                    v_out  = model(v_img)
+                v_ce   = ce_loss(v_out, v_lbl.long())
+                v_dice = dice_loss(v_out, v_lbl, softmax=True)
+                val_loss += 0.5 * v_ce + 0.5 * v_dice
+        val_loss /= len(val_loader)
+        writer.add_scalar('val_loss', val_loss, epoch)
+        model.train()
 
-                    v_ce   = ce_loss(v_out, v_lbl.long())
-                    v_dice = dice_loss(v_out, v_lbl, softmax=True)
-                    val_loss += 0.5 * v_ce + 0.5 * v_dice
-
-                    # record ONE overlay slice per validation run
-                    if not overlay_done and _pick_pos(v_img, v_lbl) is not None:
-                        idx   = _pick_pos(v_img, v_lbl)
-                        WL, WW = 50, 2000
-                        lower  = WL - WW/2
-                        base   = torch.clamp(v_img[idx,0]*4000 - lower, 0, WW) / WW
-                        gt     = (v_lbl[idx] > 0).float()
-                        pred   = torch.argmax(torch.softmax(v_out,1), 1)[idx].float()
-
-                        writer.add_image('val/overlay',
-                                        make_overlay_hu(base, gt, pred),
-                                        global_step=epoch)
-                        overlay_done = True
-
-            val_loss /= len(val_loader)
-            writer.add_scalar('val_loss', val_loss, epoch)
-            model.train()
-
-            # checkpoint only if the new val_loss is better
-            if val_loss < best_val:
-                best_val = val_loss
-                ckpt = snapshot_path / f"imagecas_epoch_{epoch}.pth"
-                torch.save(model.state_dict(), ckpt)
-                logging.info("✅  val_loss improved to %.5f — saved %s", best_val, ckpt)
-    # ─────────────────────────────────────────────────────────────────────────────
-        # ------------------------------------------------------      
+        # checkpoint if improved
+        if val_loss < best_val:
+            best_val = val_loss
+            ckpt = os.path.join(snapshot_path, f"imagecas_epoch_{epoch}.pth")
+            torch.save(model.state_dict(), ckpt)
+            logging.info("✅  val_loss improved to %.5f — saved %s", best_val, ckpt)
 
     writer.close()
     return "ImageCas training finished!"

@@ -8,7 +8,7 @@ import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from networks.vit_seg_modeling import SegmentationHead
-from trainer import trainer_imagecas, trainer_penguin   # ← make sure trainer_imagecas is imported
+from trainer import trainer_imagecas
 
 # %%
 # --- CLI-style args -----------------------------------------------------------
@@ -46,6 +46,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------#
     #  2.  Dataset-specific parameters
     # -------------------------------------------------------------------------#
+    print('Loading data\n')
     dataset_config = {
         'ImageCas': {
             'root_path': "/home/ubuntu/hist/TransUNet/data",
@@ -65,6 +66,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------#
     #  3.  Snapshot path assembly  (identical logic to your block)
     # -------------------------------------------------------------------------#
+    print('Saving snapshot\n')
     snapshot_path  = "/home/ubuntu/files/project_TransUNet/model/vit_checkpoint/imagenet21k"
     if not os.path.exists(snapshot_path):
         os.makedirs(snapshot_path)
@@ -72,6 +74,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------#
     #  4.  Model
     # -------------------------------------------------------------------------#
+    print('Loading model\n')
     config_vit = CONFIGS_ViT_seg[args['vit_name']]
     config_vit.n_classes = 2                   
     config_vit.n_skip    = args['n_skip']
@@ -95,6 +98,7 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     # try to resume from the newest "imagecas_epoch_*.pth"
     # ---------------------------------------------------------
+    print('Loading epoch if anything is saved\n')
     from pathlib import Path
     ckpt_dir = snapshot_path
     ckpts = sorted(Path(ckpt_dir).glob("imagecas_epoch_*.pth"))
@@ -108,7 +112,7 @@ if __name__ == "__main__":
         print("➤ No checkpoint found – starting from scratch")
 
 
-
+    print('changing segmentation\n')
     # replace the segmentation head to match the new num_classes
     net.segmentation_head = SegmentationHead(
         in_channels=config_vit['decoder_channels'][-1],
@@ -119,6 +123,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------#
     #  5.  Trainer dispatch
     # -------------------------------------------------------------------------#
+    print('Starting training\n')
     trainer = {
         'ImageCas': trainer_imagecas,
     }

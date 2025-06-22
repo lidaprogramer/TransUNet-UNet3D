@@ -14,7 +14,7 @@ The class applies the same random augmentations as dataset_penguin.
 
 from __future__ import annotations
 
-import os, random, numpy as np, torch, h5py
+import os, random, numpy as np, torch
 from scipy import ndimage
 from scipy.ndimage import zoom
 from torch.utils.data import Dataset
