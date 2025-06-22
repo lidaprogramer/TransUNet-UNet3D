@@ -238,7 +238,7 @@ def trainer_imagecas(args, model, snapshot_path):
             iter_num += 1
 
         # ---------------- VALIDATION PASS --------------------
-        do_val = ((epoch + 1) % 10 == 0) or (epoch == max_epoch - 1)
+        do_val = True#((epoch + 1) % 10 == 0) or (epoch == max_epoch - 1)
 
         if do_val:
             model.eval()
