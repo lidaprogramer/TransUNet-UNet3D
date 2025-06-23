@@ -13,10 +13,11 @@ from tensorboardX import SummaryWriter
 from torch.nn.modules.loss import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import DiceLoss
+from utils import DiceLoss, FocalTverskyLoss  
 from torchvision import transforms
 import cv2
 from PIL import Image
+
 
 def trainer_synapse(args, model, snapshot_path):
     from datasets.dataset_synapse import Synapse_dataset, RandomGenerator
@@ -141,7 +142,7 @@ def trainer_imagecas(args, model, snapshot_path):
     from datasets.dataset_imagecas import ImageCas_dataset, RandomGenerator
 
     # ───────────────────────── quick validation helper (5 pos + 5 neg)
-    def _quick_val(model, loader, ce_loss, dice_loss,
+    def _quick_val(model, loader, ce_loss, dice_loss, ft_loss,
                    pos_target=5, neg_target=5):
         model.eval()
         pos_left, neg_left = pos_target, neg_target
@@ -156,7 +157,9 @@ def trainer_imagecas(args, model, snapshot_path):
                     if (not is_pos[i]) and neg_left == 0:  continue
                     ce   = ce_loss(outs[i:i+1], lbls[i:i+1].long())
                     dice = dice_loss(outs[i:i+1], lbls[i:i+1], softmax=True)
-                    val_loss += 0.5 * ce + 0.5 * dice
+                    ft   = ft_loss  (outs[i:i+1], lbls[i:i+1])
+                    #val_loss += 0.5 * ce + 0.5 * dice
+                    val_loss += 0.5 * dice + 0.5 * ft    
                     seen += 1
                     if is_pos[i]:  pos_left -= 1
                     else:          neg_left -= 1
@@ -187,14 +190,19 @@ def trainer_imagecas(args, model, snapshot_path):
     batch_sz  = args['batch_size'] * args['n_gpu']
  
     logging.info("Starting with data")
+    tr_transform = transforms.Compose([
+        RandomGenerator(
+            output_size=[args['img_size'], args['img_size']],
+            elastic=True,
+            intensity_sigma=0.1,
+            gamma=0.5
+            )
+    ])
     db_train = ImageCas_dataset(
         base_dir=args['root_path'],
         list_dir=args['list_dir'],
         split="train",
-        transform=transforms.Compose(
-            [RandomGenerator(output_size=[args['img_size'],
-                                          args['img_size']])]
-        ),
+        transform=tr_transform,
         positive_ratio=0.6
     )
     logging.info("Train set size: %d", len(db_train))
@@ -255,15 +263,20 @@ def trainer_imagecas(args, model, snapshot_path):
 
     ce_loss   = CrossEntropyLoss()
     dice_loss = DiceLoss(n_cls)
-    optimizer = optim.SGD(model.parameters(),
-                          lr=base_lr,
-                          momentum=0.9,
-                          weight_decay=1e-4)
+    ft_loss   = FocalTverskyLoss(alpha=0.7, beta=0.3, gamma=0.75)
+    #optimizer = optim.SGD(model.parameters(),
+    #                      lr=base_lr,
+    #                      momentum=0.9,
+    #                      weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=base_lr, weight_decay=1e-4)  # NEW
+    max_epoch      = args['max_epochs']
+    max_iterations = 5 * len(trainloader)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_iterations)
 
     writer = SummaryWriter(log_dir)
 
     # baseline val before first gradient step
-    init_val = _quick_val(model, val_loader, ce_loss, dice_loss)
+    init_val = _quick_val(model, val_loader, ce_loss, dice_loss, ft_loss, pos_target=200, neg_target=50)
     writer.add_scalar('val_loss', init_val, 0)
     logging.info("Initial val_loss: %.5f", init_val)
 
@@ -281,23 +294,31 @@ def trainer_imagecas(args, model, snapshot_path):
             imgs, labs = batch['image'].cuda(), batch['label'].cuda()
 
             outs       = model(imgs)
-            loss_ce    = ce_loss(outs, labs.long())
+            #loss_ce    = ce_loss(outs, labs.long())
+            #loss_dice  = dice_loss(outs, labs, softmax=True)
+            #loss       = 0.5 * loss_ce + 0.5 * loss_dice
             loss_dice  = dice_loss(outs, labs, softmax=True)
-            loss       = 0.5 * loss_ce + 0.5 * loss_dice
+            loss_ft    = ft_loss (outs, labs)          # already includes soft-max
+            loss       = 0.5 * loss_dice + 0.5 * loss_ft   # CE is removed
+
 
             optimizer.zero_grad()
             loss.backward()
 
             # LR schedule
-            lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
-            for pg in optimizer.param_groups:  pg['lr'] = lr_
-            optimizer.step()
+            #lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
+            #for pg in optimizer.param_groups:  pg['lr'] = lr_
+            # optimizer.step()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step(); 
+            scheduler.step()
+            lr_ = scheduler.get_last_lr()[0]
 
             # -------- scalar logs every 10 iters --------------------
             if iter_num % 10 == 0:
                 writer.add_scalar('lr',         lr_,    iter_num)
                 writer.add_scalar('loss_total', loss,   iter_num)
-                writer.add_scalar('loss_ce',    loss_ce,iter_num)
+                #writer.add_scalar('loss_ce',    loss_ce,iter_num)
 
             # -------- visuals + quick-val every 1000 iters ----------
             if iter_num % 1000 == 0:
@@ -315,7 +336,7 @@ def trainer_imagecas(args, model, snapshot_path):
                 writer.add_image('train/label',       gt.unsqueeze(0)*50,              iter_num)
 
                 # ── quick validation loss
-                quick_val = _quick_val(model, val_loader, ce_loss, dice_loss, pos_target=200, neg_target=50)
+                quick_val = _quick_val(model, val_loader, ce_loss, dice_loss, ft_loss, pos_target=200, neg_target=50)
                 val_loss = quick_val
                 writer.add_scalar('val_loss', quick_val, iter_num)
 
@@ -362,7 +383,9 @@ def trainer_imagecas(args, model, snapshot_path):
 
                 v_ce   = ce_loss(v_out, v_lbl.long())
                 v_dice = dice_loss(v_out, v_lbl, softmax=True)
-                val_loss += 0.5 * v_ce + 0.5 * v_dice
+                v_ft   = ft_loss  (v_out, v_lbl)
+                val_loss += 0.5 * v_dice + 0.5 * v_ft
+                #val_loss += 0.5 * v_ce + 0.5 * v_dice
         val_loss /= len(val_loader)
         writer.add_scalar('val_loss', val_loss, epoch)
         model.train()

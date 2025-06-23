@@ -9,7 +9,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class FocalTverskyLoss(nn.Module):
+    """
+    Focal Tversky loss for small, imbalanced structures.
+    alpha → weight for FN, beta → weight for FP
+    gamma → focal parameter (γ=1 ⇒ plain Tversky)
+    """
+    def __init__(self, alpha=0.7, beta=0.3, gamma=0.75, smooth=1e-5):
+        super().__init__()
+        self.alpha, self.beta, self.gamma, self.smooth = alpha, beta, gamma, smooth
 
+    def forward(self, logits: torch.Tensor, target: torch.Tensor, softmax=True):
+        if softmax:
+            logits = torch.softmax(logits, dim=1)
+
+        # foreground channel only (index 1)
+        probs_fg  = logits[:, 1]
+        target_fg = (target == 1).float()
+
+        tp = (probs_fg * target_fg).sum()
+        fp = (probs_fg * (1 - target_fg)).sum()
+        fn = ((1 - probs_fg) * target_fg).sum()
+
+        tversky = (tp + self.smooth) / (tp + self.alpha * fn + self.beta * fp + self.smooth)
+        loss    = (1 - tversky) ** self.gamma
+        return loss
+        
 class DiceLoss(nn.Module):
     """
     Dice loss that matches the original call pattern **but**

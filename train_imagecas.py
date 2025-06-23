@@ -101,13 +101,13 @@ if __name__ == "__main__":
     print('Loading epoch if anything is saved\n')
     from pathlib import Path
     ckpt_dir = snapshot_path
-    ckpts = sorted(Path(ckpt_dir).glob("imagecas_epoch_*.pth"))
+    ckpts = sorted(Path(ckpt_dir).glob("best.pth"))
     start_epoch = 0
     if ckpts:
         last_ckpt = ckpts[-1]
         print(f"⚡ Resuming from {last_ckpt.name}")
         net.load_state_dict(torch.load(last_ckpt, map_location="cpu"), strict=False)
-        start_epoch = int(last_ckpt.stem.split('_')[-1]) + 1
+        start_epoch = 1#int(last_ckpt.stem.split('_')[-1]) + 1
     else:
         print("➤ No checkpoint found – starting from scratch")
 

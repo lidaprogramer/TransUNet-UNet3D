@@ -18,7 +18,7 @@ import os, random, numpy as np, torch
 from scipy import ndimage
 from scipy.ndimage import zoom
 from torch.utils.data import Dataset
-
+import cv2
 # -----------------------------------------------------------------------------
 #  Simple augmentations
 # -----------------------------------------------------------------------------
@@ -41,27 +41,81 @@ def _random_rotate(img: np.ndarray, lbl: np.ndarray):
 
 
 class RandomGenerator:
-    """Match Penguin’s on‑the‑fly augmentation/resize pipeline."""
-    def __init__(self, output_size: tuple[int, int]):
-        self.output_size = output_size
+    """
+    On-the-fly resize **plus** optional:
+      • elastic deformations
+      • HU noise (intensity_sigma)
+      • random gamma contrast
+    """
+    def __init__(self,
+                 output_size: tuple[int, int],
+                 elastic: bool = False,
+                 intensity_sigma: float = 0.0,
+                 gamma: float | None = None):
+        self.output_size    = output_size
+        self.elastic        = elastic
+        self.intensity_sigma = intensity_sigma
+        self.gamma          = gamma        # if None → no gamma jitter
 
+ 
+    # ------------------------- helpers -------------------------------------
+    def _elastic(self, img, lbl, alpha=20, sigma=4):
+        """
+        Classic elastic deformation (Simard 2003):
+        • alpha – scaling of displacement (pixels)
+        • sigma – Gaussian blur std-dev
+        """
+        h, w = img.shape
+        dx = cv2.GaussianBlur((np.random.rand(h, w)*2 - 1).astype(np.float32),
+                              ksize=(0, 0), sigmaX=sigma) * alpha
+        dy = cv2.GaussianBlur((np.random.rand(h, w)*2 - 1).astype(np.float32),
+                              ksize=(0, 0), sigmaX=sigma) * alpha
+
+        x, y = np.meshgrid(np.arange(w), np.arange(h))
+        map_x = (x + dx).astype(np.float32)
+        map_y = (y + dy).astype(np.float32)
+
+        img_deform = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_REFLECT_101)
+        lbl_deform = cv2.remap(lbl, map_x, map_y, cv2.INTER_NEAREST,
+                               borderMode=cv2.BORDER_REFLECT_101)
+        return img_deform, lbl_deform
+
+    # ------------------------- __call__ ------------------------------------
     def __call__(self, sample):
         img, lbl = sample['image'], sample['label']
 
+        # spatial aug
         if random.random() > 0.5:
             img, lbl = _random_rot_flip(img, lbl)
         elif random.random() > 0.5:
             img, lbl = _random_rotate(img, lbl)
+        if self.elastic and random.random() > 0.5:
+            img, lbl = self._elastic(img, lbl)
 
-        H, W = img.shape
-        if (H, W) != self.output_size:
-            zoom_f = (self.output_size[0] / H, self.output_size[1] / W)
-            img = zoom(img,  zoom_f, order=3)
-            lbl = zoom(lbl,  zoom_f, order=0)
+        # photometric aug ----------------------------------------------------
+        #if self.intensity_sigma > 0:
+        #    img = img + np.random.normal(0, self.intensity_sigma, img.shape)
+        if self.gamma and random.random() > 0.5:
+            g = random.uniform(1-self.gamma, 1+self.gamma)
+            # normalise to 0-1, apply gamma, rescale back
+            imin, imax = img.min(), img.max()
+            img = np.power((img - imin) / (imax - imin + 1e-8), g)
+            img = img * (imax - imin) + imin
 
-        img_t = torch.from_numpy(img.astype(np.float32)).unsqueeze(0)  # C,H,W
+
+        # resize -------------------------------------------------------------
+        if img.shape != self.output_size:
+            zoom_f = (self.output_size[0]/img.shape[0],
+                      self.output_size[1]/img.shape[1])
+            img = zoom(img, zoom_f, order=3)
+            lbl = zoom(lbl, zoom_f, order=0)
+
+        # to tensor ----------------------------------------------------------
+        img_t = torch.from_numpy(img.astype(np.float32)).unsqueeze(0)
         lbl_t = torch.from_numpy(lbl.astype(np.float32))
-        return {'image': img_t, 'label': lbl_t.long(), 'case_name': sample['case_name']}
+        return {'image': img_t, 'label': lbl_t.long(),
+                'case_name': sample['case_name']}
 
 
 # -----------------------------------------------------------------------------
