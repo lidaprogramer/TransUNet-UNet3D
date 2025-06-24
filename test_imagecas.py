@@ -1,7 +1,7 @@
 """test_imagecas.py — volume‑level evaluation for ImageCas using **DiceLoss** class
 
 * Evaluates the full test set (default), a random volume, or a specified prefix.
-* Computes **mean Dice (foreground class only)** with your `utils.DiceLoss` and
+* Computes **mean Dice (foreground class only)** with `utils.DiceLoss` and
   **mean HD95** per volume.
 * **Only two volumes are saved**: the best‑Dice and worst‑Dice volumes.
 * Prints grand‑mean Dice & HD95 at the end for easy reporting.
