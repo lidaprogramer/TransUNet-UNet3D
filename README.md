@@ -168,18 +168,7 @@ The training process includes:
 - Training history plots
 - Prediction visualizations with overlays
 
-## File Structure
 
-```
-coronary-artery-segmentation/
-├── coronary_segmentation.py          # Main implementation
-├── data_loading.py                   # Data loading utilities
-├── requirements.txt                  # Package dependencies
-├── README.md                        # This file
-└── examples/
-    ├── training_example.py          # Training script example
-    └── prediction_example.py        # Prediction script example
-```
 
 ## Performance Notes
 
@@ -188,44 +177,9 @@ coronary-artery-segmentation/
 - **Scalability**: Configurable ROI sizes for different memory constraints
 - **Reproducibility**: Consistent results with proper random seeding
 
-## Model Saving and Loading
 
-```python
-# Save trained model
-model.save_model('trained_model.pth')
 
-# Load pre-trained model
-model = CoronaryArterySegmentation()
-model.load_model('trained_model.pth')
-```
 
-## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
 
-## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@misc{coronary_artery_segmentation,
-  title={3D Coronary Artery Segmentation with U-Net},
-  author={Your Name},
-  year={2025},
-  url={https://github.com/yourusername/coronary-artery-segmentation}
-}
-```
-
-## Acknowledgments
-
-- Built with [MONAI](https://monai.io/) framework
-- Uses [PyTorch](https://pytorch.org/) for deep learning
-- Inspired by medical imaging segmentation research
